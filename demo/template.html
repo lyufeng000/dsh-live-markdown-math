@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>MD + TeX · DSH 离线编辑器演示</title>
+<style>
+:root { color-scheme:light dark; font:15px/1.65 system-ui,sans-serif; background:light-dark(#f4f5f7,#101217); color:light-dark(#20232c,#e4e7ee); }
+body { margin:0; } main { max-width:900px; margin:60px auto; padding:0 24px 40px; }
+h1 { font-size:34px; line-height:1.2; letter-spacing:-.035em; margin:12px 0 16px; }
+p { opacity:.8; } .eyebrow { font:11px/1.5 ui-monospace,monospace; letter-spacing:.16em; text-transform:uppercase; }
+.samples { display:flex; gap:8px; flex-wrap:wrap; margin:22px 0 14px; }
+.samples button { cursor:pointer; font:inherit; font-size:12px; padding:7px 12px; color:inherit; background:transparent; border:1px solid #8886; border-radius:6px; }
+.samples button:focus-visible { outline:2px solid currentColor; outline-offset:3px; }
+.footnote { font-size:12px; margin-top:22px; } details { margin-top:24px; border-top:1px solid #8884; padding-top:14px; }
+summary { cursor:pointer; font-size:13px; } pre { white-space:pre-wrap; overflow-wrap:anywhere; font:13px/1.65 ui-monospace,Consolas,monospace; }
+@media (max-width:600px) { main { margin-top:28px; padding:0 16px 24px; } h1 { font-size:28px; } }
+</style>
+</head>
+<body><main>
+<div class="eyebrow">DSH · Live Markdown + Math</div>
+<h1>写源码，也看见表达。</h1>
+<p>焦点所在行保留标记，离开后呈现样式。点击公式即可编辑原始 LaTeX。</p>
+<div class="samples" role="group" aria-label="载入示例（会替换演示文本）">
+<button type="button" data-sample="basic">Markdown 示例</button>
+<button type="button" data-sample="math">公式示例</button>
+<button type="button" data-sample="security">安全降级示例</button>
+</div>
+<section class="lmm-card" aria-label="离线编辑器演示">
+<header class="lmm-toolbar"><strong>MD + TeX</strong><div class="lmm-modes" role="group" aria-label="显示模式"><button type="button" data-mode="live" aria-pressed="true">实时</button><button type="button" data-mode="source" aria-pressed="false">源码</button></div><span class="lmm-native">离线演示 · 不连接 DSH</span></header>
+<div class="lmm-editor" id="editor"></div>
+<p class="lmm-notice" id="notice" role="status">公式、字体与样式已全部内嵌，无需网络。</p>
+<footer class="lmm-footer"><span>Enter 演示发送 · Shift+Enter 换行</span><button type="button" class="lmm-send" id="send">演示发送</button></footer>
+</section>
+<p class="footnote">这只是编辑器预览，不代表已安装或通过 DSH 真机联调。表格保持文本形式，图片与链接不会加载或打开。</p>
+<details><summary>查看原始 Markdown（真正交给宿主的是它）</summary><pre id="source"></pre></details>
+<!-- THIRD_PARTY_NOTICES -->
+</main><script>/* BUNDLE */</script></body>
+</html>

@@ -1,0 +1,47 @@
+.lmm-card {
+  --lmm-bg: var(--dsw-alias-bg-base, light-dark(#ffffff, #191b20));
+  --lmm-fg: var(--dsw-alias-label-primary, light-dark(#1a1c23, #e9eaf0));
+  --lmm-muted: var(--dsw-alias-label-secondary, light-dark(#555b6b, #aab0bd));
+  --lmm-edge: var(--dsw-alias-border-l1, color-mix(in srgb, var(--lmm-fg) 16%, transparent));
+  color: var(--lmm-fg); background: var(--lmm-bg); border: 1px solid var(--lmm-edge);
+  border-radius: 14px; overflow: hidden; width: 100%; min-width: 0;
+  font: inherit; text-align: start; color-scheme: inherit;
+}
+.lmm-card:focus-within { border-color: color-mix(in srgb, var(--lmm-fg) 42%, transparent); }
+.lmm-toolbar, .lmm-footer { display: flex; gap: 12px; align-items: center; padding: 10px 14px; flex-wrap: wrap; }
+.lmm-toolbar { border-bottom: 1px solid var(--lmm-edge); font-size: 12px; }
+.lmm-toolbar strong { font-size: 12px; letter-spacing: .03em; }
+.lmm-modes { display: flex; border-radius: 7px; background: color-mix(in srgb, var(--lmm-fg) 7%, transparent); padding: 2px; }
+.lmm-card button, .lmm-toggle { font: inherit; cursor: pointer; border: 1px solid transparent; padding: 5px 9px; border-radius: 6px; color: inherit; background: transparent; }
+.lmm-card button:hover, .lmm-toggle:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.lmm-card button:focus-visible, .lmm-toggle:focus-visible, .lmm-formula:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.lmm-card button[aria-pressed="true"] { background: var(--lmm-bg); box-shadow: 0 1px 3px #0002; }
+.lmm-card button:disabled, .lmm-toggle:disabled { cursor: not-allowed; opacity: .5; }
+.lmm-native { margin-inline-start: auto; color: var(--lmm-muted) !important; }
+.lmm-footer { border-top: 1px solid var(--lmm-edge); font-size: 11px; color: var(--lmm-muted); justify-content: space-between; }
+.lmm-card .lmm-send { background: var(--lmm-fg); color: var(--lmm-bg); min-width: 60px; font-weight: 600; font-size: 12px; }
+.lmm-card .lmm-send:hover { background: var(--lmm-fg); opacity: .85; }
+.lmm-editor { line-height: 1.65; min-width: 0; }
+.lmm-editor .cm-cursor { border-left-color: var(--lmm-fg); }
+.lmm-editor .cm-selectionBackground, .lmm-editor.cm-focused .cm-selectionBackground { background: color-mix(in srgb, #738af5 35%, transparent) !important; }
+.lmm-heading { font-weight: 650; padding-top: 8px !important; padding-bottom: 4px !important; }
+.lmm-h1 { font-size: 1.65em; } .lmm-h2 { font-size: 1.4em; } .lmm-h3 { font-size: 1.18em; }
+.lmm-strong { font-weight: 700; } .lmm-emphasis { font-style: italic; } .lmm-strike { text-decoration: line-through; }
+.lmm-code, .lmm-code-line, .lmm-math-source { font-family: ui-monospace, Consolas, monospace; background: color-mix(in srgb, currentColor 6%, transparent); }
+.lmm-code { padding: 1px 3px; border-radius: 3px; }
+.lmm-quote { border-inline-start: 3px solid var(--lmm-edge); color: var(--lmm-muted); }
+.lmm-marker { opacity: .5; } .lmm-link { text-decoration: underline; text-underline-offset: 3px; }
+.lmm-list-mark { color: var(--lmm-muted); font-weight: 600; }
+.lmm-formula { color: inherit; cursor: text; border-radius: 4px; max-width: 100%; }
+.lmm-formula.lmm-display { display: block; padding: 10px 14px; overflow-x: auto; }
+.lmm-formula .katex-display { margin: .2em 0; }
+.lmm-formula .katex { font-size: 1.08em; }
+.lmm-math-error { white-space: pre-wrap; font-family: ui-monospace, Consolas, monospace; text-decoration: underline dotted; }
+.lmm-notice { padding: 4px 14px; font-size: 12px; color: var(--lmm-muted); overflow-wrap: anywhere; }
+.lmm-native-control { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; max-width: 100%; }
+.lmm-toggle { border-color: color-mix(in srgb, currentColor 20%, transparent); font-size: 11px; white-space: nowrap; }
+.lmm-native-hint { font-size: 11px; opacity: .75; }
+.lmm-recovery { width: 100%; max-width: 640px; }
+.lmm-recovery textarea { width: 100%; font: 12px/1.5 ui-monospace, Consolas, monospace; color: inherit; background: transparent; }
+@media (prefers-reduced-motion: reduce) { .lmm-card * { scroll-behavior: auto !important; } }
+@media (max-width: 480px) { .lmm-toolbar, .lmm-footer { padding: 8px; gap: 6px; } .lmm-footer span { max-width: 210px; } }

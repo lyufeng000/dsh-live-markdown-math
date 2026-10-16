@@ -1,0 +1,4 @@
+- insert:
+    - id: live-markdown-math
+      name: dsh-live-markdown-math
+      disabled: false

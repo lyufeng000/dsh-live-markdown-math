@@ -1,0 +1,10 @@
+# 本地开发与验收产物，不随仓库发布
+node_modules/
+*.tgz
+*.bak-*
+*.log
+.DS_Store
+Thumbs.db
+
+# 生成的演示页（由 node scripts/build.mjs --demo 重新生成，不入库）
+demo/index.html

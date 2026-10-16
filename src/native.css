@@ -1,0 +1,54 @@
+/* Only opt-in resident editor roots, never the rest of the application. */
+[data-lmm-native] { color-scheme: inherit; }
+[data-lmm-native] [data-lmm-role~="strong"] { font-weight: 700; }
+[data-lmm-native] [data-lmm-role~="em"] { font-style: italic; }
+[data-lmm-native] [data-lmm-role~="strike"] { text-decoration: line-through; }
+[data-lmm-native] [data-lmm-role~="h1"] { font-size: 1.65em; font-weight: 700; line-height: 1.4; }
+[data-lmm-native] [data-lmm-role~="h2"] { font-size: 1.4em; font-weight: 700; line-height: 1.4; }
+[data-lmm-native] [data-lmm-role~="h3"] { font-size: 1.2em; font-weight: 650; }
+[data-lmm-native] [data-lmm-role~="h4"], [data-lmm-native] [data-lmm-role~="h5"], [data-lmm-native] [data-lmm-role~="h6"] { font-weight: 650; }
+[data-lmm-native] [data-lmm-role~="quote"] { color: var(--dsw-alias-label-secondary, currentColor); }
+[data-lmm-native] [data-lmm-role~="link"] { text-decoration: underline; text-underline-offset: 3px; }
+[data-lmm-native] [data-lmm-role~="code"], [data-lmm-native] [data-lmm-role~="codeblock"] {
+  font-family: ui-monospace, Consolas, monospace;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border-radius: 3px;
+}
+/* The hidden source deliberately keeps its font metrics: the native caret is
+   painted with the metrics of the text it sits in, so hiding with a zero font
+   size (or a zero line-height) leaves an invisible caret exactly where the
+   caret lives — inside headings, emphasis markers and formulas. Only the
+   glyphs are transparent, and the measured --lmm-advance cancels the advance
+   so the source still takes no room; a formula reserves its own box.
+   Hiding is NOT gated on composition: reverting a rendered line to raw source
+   while an input method composes is exactly the flicker users report. The
+   transform stays paused during composition, so these attributes are simply
+   carried over from the last consistent paint. */
+[data-lmm-native] [data-lmm-hide="true"],
+[data-lmm-native] [data-lmm-math="true"] {
+  -webkit-text-fill-color: transparent;
+  letter-spacing: var(--lmm-advance, normal);
+}
+[data-lmm-native] [data-lmm-math="true"] {
+  display: inline-block; width: var(--lmm-width); height: var(--lmm-height);
+  line-height: var(--lmm-height, 1.25em); vertical-align: middle;
+}
+/* One view-only list label per recognised item: the source marker is hidden
+   above, and this glyph is painted in its place. Generated content never
+   enters the editor DOM, so Lexical and the clipboard keep the source. */
+[data-lmm-native] [data-lmm-role~="ulm"]::before,
+[data-lmm-native] [data-lmm-role~="olm"]::before {
+  -webkit-text-fill-color: currentColor; letter-spacing: normal;
+  color: var(--dsw-alias-label-secondary, currentColor);
+  content: var(--lmm-list-label, "\2022");
+}
+.lmm-native-layer { position: fixed; inset: 0; z-index: 30; pointer-events: none; overflow: hidden; color-scheme: inherit; }
+.lmm-native-layer .lmm-native-formula { position: absolute; display: inline-block; width: max-content; max-width: none; white-space: nowrap; pointer-events: none; line-height: normal; }
+.lmm-native-layer .lmm-native-formula .katex-display { margin: 0; }
+.lmm-native-layer .lmm-native-formula .katex { font-size: 1.08em; }
+@media print { .lmm-native-layer { display: none; } [data-lmm-native] [data-lmm-hide], [data-lmm-native] [data-lmm-math] { -webkit-text-fill-color: currentColor !important; letter-spacing: normal !important; display: inline !important; width: auto !important; height: auto !important; line-height: inherit !important; } }
+
+/* Sent user messages: the rendered formula replaces its source, which stays in
+   the DOM (invisible but selectable) so copying still yields what was typed. */
+[data-chat-flow-kind="user"] .lmm-chat-formula { position: relative; display: inline-block; vertical-align: baseline; }
+[data-chat-flow-kind="user"] .lmm-chat-source { position: absolute; inset: 0; color: transparent; white-space: pre; overflow: hidden; }
