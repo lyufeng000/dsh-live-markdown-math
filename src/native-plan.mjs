@@ -14,7 +14,10 @@ export function readLayout(root) {
       const kids = node.getChildren(); children.set(key, kids.map(k => k.getKey()));
       for (const child of kids) walk(child);
     } else {
-      const value = type === 'reference-chip' ? '\uFFFC' : type === 'linebreak' ? '\n' : node.getTextContent();
+      // 0.2.1 also projects a claimed command chip as one U+FFFC, like a reference chip.
+      const value = type === 'reference-chip' || type === 'command-chip'
+        ? '\uFFFC'
+        : type === 'linebreak' ? '\n' : node.getTextContent();
       text += value;
       leaves.push({ node, key, type, from, to: text.length, text: value });
     }
@@ -63,9 +66,9 @@ function pendingHeadings(text, nodes) {
 
 /**
  * The same rule for every space-delimited block marker: `-`, `*`, `+`, `1.` and
- * `>` are only constructs once their own space is typed, so a bare marker, a
- * decimal like `1.5` and a word like `>引用` mid-type stay plain source instead
- * of collapsing under the caret.
+ * `>` are normally constructs once their own space is typed, so a decimal like
+ * `1.5` and a word like `>引用` mid-type stay plain source. Empty ordered lines
+ * are the explicit composer exception, handled separately below.
  */
 function pendingListMarks(text, nodes) {
   const pending = new Set();
@@ -128,6 +131,21 @@ export function makePlan(text) {
         }
       }
     }
+  }
+  // Empty ordered items can be typed directly after a paragraph. CommonMark
+  // does not start a list there until content arrives; the composer still needs
+  // to preview the explicit marker and let the next newline end that empty item.
+  const orderedStarts = new Set(spans.filter(span => span.role === 'olm').map(span => span.from));
+  const protectedRanges = [...parsed.literals, ...parsed.nodes.filter(n =>
+    ['FencedCode', 'CodeBlock', 'HTMLBlock', 'HTMLTag', 'InlineCode'].includes(n.name))]
+    .sort((a, b) => a.from - b.from || b.to - a.to);
+  let protectedIndex = 0;
+  for (const match of text.matchAll(/^(\d{1,9}\.)([ \t]*)$/gm)) {
+    const from = match.index, to = from + match[1].length;
+    while (protectedRanges[protectedIndex]?.to <= from) protectedIndex++;
+    if (orderedStarts.has(from) || protectedRanges[protectedIndex]?.from <= from) continue;
+    add(from, to, 'olm'); marker(from, to);
+    if (spans.length > MAX_SEGMENTS) return { segments: [], markers: [], formulas: [], limited: true };
   }
   for (const f of parsed.math) {
     // Multi-paragraph math remains editable source: never collapse native blocks.

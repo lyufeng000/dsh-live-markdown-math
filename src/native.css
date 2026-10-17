@@ -36,8 +36,8 @@
 /* One view-only list label per recognised item: the source marker is hidden
    above, and this glyph is painted in its place. Generated content never
    enters the editor DOM, so Lexical and the clipboard keep the source. */
-[data-lmm-native] [data-lmm-role~="ulm"]::before,
-[data-lmm-native] [data-lmm-role~="olm"]::before {
+[data-lmm-native] [data-lmm-role~="ulm"][data-lmm-hide="true"]::before,
+[data-lmm-native] [data-lmm-role~="olm"][data-lmm-hide="true"]::before {
   -webkit-text-fill-color: currentColor; letter-spacing: normal;
   color: var(--dsw-alias-label-secondary, currentColor);
   content: var(--lmm-list-label, "\2022");

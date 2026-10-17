@@ -29,13 +29,14 @@
   "license": "MIT",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test --test-concurrency=1 test/native.test.mjs test/client.test.mjs test/markdown.test.mjs test/math.test.mjs test/package.test.mjs test/styles.test.mjs",
+    "test": "node --test --test-concurrency=1 test/audit.test.mjs test/native.test.mjs test/client.test.mjs test/markdown.test.mjs test/math.test.mjs test/chat-math.test.mjs test/package.test.mjs test/styles.test.mjs",
     "check": "node scripts/check.mjs",
     "check:browser": "node scripts/check.mjs --browser",
     "test:legacy": "node --test --test-concurrency=1 test/bridge.test.mjs test/editor.test.mjs test/demo.test.mjs"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
   },
   "dsh": {
     "bundle": {

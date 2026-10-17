@@ -89,6 +89,28 @@ test('two lifecycle mounts ref-count one adapter and dispose without touching th
   } finally { manager.dispose(); f.dispose(); }
 });
 
+test('adapter failure is reported once through the manager hook and never throws', () => {
+  class FakeText { static getType() { return 'text'; } splitText() {} setStyle() {} getStyle() { return ''; } getMode() { return 'normal'; } }
+  class FakeRoot { static getType() { return 'root'; } }
+  const failingEditor = () => ({
+    _config: { namespace: 'dsh-composer' },
+    _nodes: new Map([['root', { klass: FakeRoot }], ['text', { klass: FakeText }]]),
+    update() {}, getEditorState() { throw new Error('unused'); }, getRootElement() { return null; },
+    getElementByKey() { return null; }, registerNodeTransform() { throw new Error('fixture failure'); },
+    registerUpdateListener() { return () => {}; }, registerRootListener() { return () => {}; }, isComposing() { return false; },
+  });
+  const messages = [];
+  const manager = plugin.createManager({ onError: message => messages.push(message) });
+  try {
+    manager.acquire(failingEditor()); manager.acquire(failingEditor());
+    assert.equal(messages.length, 1, 'one warning per manager');
+    assert.match(messages[0], /原生编辑器适配已停止/);
+    const throwing = plugin.createManager({ onError: () => { throw new Error('diagnostics failure'); } });
+    assert.doesNotThrow(() => throwing.acquire(failingEditor()));
+    throwing.dispose();
+  } finally { manager.dispose(); }
+});
+
 test('a reloaded client replaces the previous instance instead of stacking it', () => {
   const f = host(null);
   plugin.apply(f.ctx);
@@ -116,9 +138,15 @@ test('live source never registers takeover, writes whole drafts or owns input/fi
   const adapter = await readFile(new URL('../src/native-adapter.mjs', import.meta.url), 'utf8');
   assert.ok(!/conversation\.composer|conversation\.input\.left|createLiveEditor|DraftMirror/.test(client));
   assert.ok(!/\.setRootElement\(|\.setEditable\(|\.setDraft\(|\.submit\(|\.insertText\(/.test(client + adapter));
-  assert.ok(!/addEventListener\(['"](?:paste|drop|keydown|beforeinput|input)['"]/.test(adapter));
+  assert.ok(!/addEventListener\(['"](?:paste|drop|input)['"]/.test(adapter));
+  assert.ok(!/\.preventDefault\(|\.stopPropagation\(|\.stopImmediatePropagation\(/.test(adapter), 'never intercept native input');
+  // Two passive observations identify the native newline intent; neither owns it.
+  const newlineObservers = [...adapter.matchAll(/addEventListener\(['"](?:keydown|beforeinput)['"], ([^;]+)\);/g)];
+  assert.equal(newlineObservers.length, 2);
+  for (const observer of newlineObservers) assert.match(observer[1], /passive: true/);
   // The single deliberate document write is the inherited list marker.
   assert.match(adapter, /function continueList/);
-  assert.equal([...adapter.matchAll(/block\.append\(/g)].length, 1, 'exactly one node insertion');
+  assert.equal([...adapter.matchAll(/\.insertAfter\(/g)].length, 1, 'exactly one marker insertion after the observed native break');
+  assert.match(adapter, /last\.node\.insertAfter\(node\)/);
   assert.equal([...adapter.matchAll(/\.insertText\(|\.insertParagraph\(|\.setTextContent\(/g)].length, 0, 'no text rewriting');
 });

@@ -5,7 +5,7 @@ import * as jsx from 'react/jsx-runtime';
 import React from 'react';
 
 export const runtimePath = process.env.DSH_NATIVE_RUNTIME;
-export const runtimeSHA = '64843c950b829f44feed3248af6c46bbd620cf85e7c687b4f7f60e1ec4eb4782';
+export const runtimeSHA = '843dbcd884e05d77e525bf84b9e6dce180fd49ac8486a3c75591c291f09c9afa';
 export function runtimeBody() {
   const source = fs.readFileSync(runtimePath, 'utf8');
   if (createHash('sha256').update(source).digest('hex') !== runtimeSHA) throw new Error('Unreviewed native runtime: update fixture seam before testing');
@@ -14,11 +14,11 @@ export function runtimeBody() {
   if (start < 0 || end < start) throw new Error('Native fixture boundaries missing');
   return source.slice(start, end);
 }
-export const runtimeExports = `return { DraftEditorRuntime, ReferenceChipNode, TextRefNode,
+export const runtimeExports = `return { DraftEditorRuntime, ReferenceChipNode, CommandChipNode, TextRefNode,
   getRoot:nl, getSelection:Kr, createText:Go, createParagraph:es, project:$composerLayout,
   undo:Qe$2, redo:Ze$2, input:je$2, copy:vn$2, paste:Je$2, selectionChange:Ie$2, deleteCharacter:$e$2,
   createEditor:ys, registerHistory:O, createHistory:z, registerPlainText:O$1,
-  registerClaimDecoration, registerTextRefDecoration, exportHTML:pt };`;
+  registerTextRefDecoration, exportHTML:pt };`;
 export function loadNativeRuntime() {
   return new Function('react_jsx_runtime', 'react', runtimeBody() + '\n' + runtimeExports)(jsx, React);
 }

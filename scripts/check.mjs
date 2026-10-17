@@ -10,7 +10,7 @@ const out = process.env.DSH_LMM_BUILD_DIR || await mkdtemp(path.join(temporary, 
 const env = { ...process.env, DSH_LMM_BUILD_DIR: out };
 const digest = async () => createHash('sha256').update(await readFile(path.join(root, 'lib/client.js'))).digest('hex');
 const before = await digest();
-const tests = ['native', 'client', 'markdown', 'math', 'chat-math', 'package', 'styles'].map(name => `test/${name}.test.mjs`);
+const tests = ['audit', 'native', 'client', 'markdown', 'math', 'chat-math', 'package', 'styles'].map(name => `test/${name}.test.mjs`);
 let failed = false;
 for (const args of [['scripts/build.mjs', '--out', out], ['--test', '--test-concurrency=1', ...tests], ...(process.argv.includes('--browser') ? [['scripts/probe-native.mjs']] : [])]) {
   const child = spawnSync(process.execPath, args, { cwd: root, env, stdio: 'inherit' });

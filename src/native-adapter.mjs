@@ -23,8 +23,8 @@ export function mountNativeAdapter(editor, { onError = () => {} } = {}) {
   let root = null, layer = null, frame = null, timer = null, backstop = null, detachRoot = () => {};
   let lastText = null, lastPlan = null;
   const touched = new Set(), formulaCache = new Map(), mathTargets = new Map(), overlays = new Map();
-  /** Draft texts whose list continuation this adapter already inserted. */
-  const continued = new Set();
+  // A single native newline gesture in this input turn, never inferred from draft text.
+  let newlineIntent = null;
   let revealedFormula = null, measureContext;
   const advanceCache = new Map();
   /**
@@ -88,7 +88,7 @@ export function mountNativeAdapter(editor, { onError = () => {} } = {}) {
     onError('原生编辑器适配已停止；文本、图片与发送仍由 DSH 管理。');
   }
   /** A line that is nothing but a list marker: Enter on it ends the list. */
-  const EMPTY_ITEM = /^(?:[-*+]|\d{1,9}\.) $/;
+  const EMPTY_ITEM = /^(?:[-*+] |\d{1,9}\.[ \t]*)$/;
   /** Marker text that would continue the item at the start of `text`, or null. */
   function nextMarker(text) {
     const bullet = /^([-*+]) /.exec(text);
@@ -106,33 +106,36 @@ export function mountNativeAdapter(editor, { onError = () => {} } = {}) {
    * line break, one undo removes both.
    */
   function continueList(root, layout, selection) {
-    if (!selection || selection.from !== selection.to) return;
+    const intent = newlineIntent; newlineIntent = null;
+    if (!intent || !selection || selection.from !== selection.to || selection.to !== intent.at + 1) return false;
     const Text = editor._nodes?.get('text')?.klass;
-    const block = typeof root.getLastChild === 'function' ? root.getLastChild() : undefined;
-    if (!Text || !block || typeof block.append !== 'function') return;
-    // Only at the end of the draft: that is where a pressed line break lands.
-    if (selection.from !== layout.text.length) return;
-    const before = layout.text;
-    const lineStart = before.lastIndexOf('\n') + 1;
-    if (before.slice(lineStart) !== '') return;         // the caret's own line must be empty
-    const previousStart = before.lastIndexOf('\n', lineStart - 2) + 1;
-    const previous = before.slice(previousStart, Math.max(previousStart, lineStart - 1));
-    const attached = node => node && typeof node.remove === 'function' && (typeof node.isAttached !== 'function' || node.isAttached());
-    // A still-empty item ends the list instead of numbering on for ever.
+    const last = layout.leaves.find(leaf => leaf.from === intent.at && leaf.type === 'linebreak');
+    const block = last?.node.getParent();
+    // Only the exact native linebreak at the observed caret. Mount, restore,
+    // paste, undo and reference expansion are not newline gestures. A list may
+    // precede other paragraphs/chips; it need not end the whole draft.
+    if (!Text || !block || block.getKey() !== intent.blockKey ||
+      layout.text !== `${intent.text.slice(0, intent.at)}\n${intent.text.slice(intent.at)}`) return false;
+    const previousStart = intent.text.lastIndexOf('\n', intent.at - 1) + 1;
+    const previous = intent.text.slice(previousStart, intent.at), marker = nextMarker(previous) ??
+      (EMPTY_ITEM.test(previous) ? '1. ' : null);
+    // The Markdown parser, not the regex, decides if this is a list. In
+    // particular, literal lines inside code/HTML/math must never be rewritten.
+    if (!marker || !getPlan(intent.text).segments.some(segment => segment.from === previousStart &&
+      segment.roles.some(role => role === 'olm' || role === 'ulm'))) return false;
     if (EMPTY_ITEM.test(previous)) {
-      for (const leaf of layout.leaves) if (leaf.from >= previousStart && leaf.to <= lineStart && attached(leaf.node)) leaf.node.remove();
-      const linebreak = [...layout.leaves].reverse().find(leaf => leaf.type === 'linebreak');
-      if (attached(linebreak?.node)) linebreak.node.remove();
-      if (typeof block.selectEnd === 'function') block.selectEnd();
-      return;
+      const leaves = layout.leaves.filter(leaf => leaf.from >= previousStart && leaf.to <= last.to);
+      if (leaves.some(leaf => leaf.node.getParent()?.getKey() !== block.getKey() || (leaf !== last && !canStyle(leaf)))) return false;
+      // Delete just this marker and the new break, never surrounding content.
+      const index = leaves[0].node.getIndexWithinParent();
+      for (const leaf of leaves) leaf.node.remove();
+      block.select(index, index);
+    } else {
+      const node = new Text(marker);
+      last.node.insertAfter(node);
+      node.select(marker.length, marker.length);
     }
-    const marker = nextMarker(previous);
-    // Deleting an inherited marker must not bring it straight back.
-    if (!marker || continued.has(before)) return;
-    continued.add(before); if (continued.size > 40) continued.delete(continued.values().next().value);
-    const node = new Text(marker);
-    block.append(node);
-    if (typeof node.select === 'function') node.select(marker.length, marker.length);
+    return true;
   }
   function schedule() {
     if (!root || disposed || failed) return;
@@ -299,7 +302,7 @@ export function mountNativeAdapter(editor, { onError = () => {} } = {}) {
     layer.setAttribute('aria-hidden', 'true'); doc.body.append(layer);
     // Keep the rendered view during composition; only the transform and full
     // paints pause, so an input method never sees editor DOM writes.
-    let pointerStart = null, pointerTimer = null, compositionTimer = null, lastComposition = 0;
+    let pointerStart = null, pointerTimer = null, compositionTimer = null, newlineTimer = null, lastComposition = 0;
     const stopComposition = () => {
       if (!composing && !next.hasAttribute('data-lmm-composing')) return;
       win.clearTimeout(compositionTimer); compositionTimer = null;
@@ -384,6 +387,37 @@ export function mountNativeAdapter(editor, { onError = () => {} } = {}) {
         schedule();
       }, 0);
     };
+    const newline = event => {
+      newlineIntent = null; win.clearTimeout(newlineTimer); newlineTimer = null;
+      if (disposed || failed || composing || editor.isComposing() || event.isComposing || event.keyCode === 229) return;
+      // Observe only. The native keymap still arbitrates/send/handles the event.
+      const accepted = event.type === 'keydown'
+        ? event.key === 'Enter' && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey
+        : event.inputType === 'insertLineBreak' || event.inputType === 'insertParagraph';
+      if (!accepted || event.defaultPrevented || !next.contains(event.target)) return;
+      try {
+        const state = editor.getEditorState();
+        const intent = state.read(() => {
+          const node = state._nodeMap.get('root'), layout = readLayout(node);
+          const selection = selectionRange(state._selection, layout);
+          if (!selection || selection.from !== selection.to) return null;
+          const at = selection.to;
+          // Continue only at a line end, never split or renumber an item's body.
+          if (at < layout.text.length && layout.text[at] !== '\n') return null;
+          const anchor = state._nodeMap.get(state._selection.anchor.key);
+          const block = anchor?.getType() === 'text' || anchor?.getType() === 'linebreak' ? anchor.getParent() : anchor;
+          return { text: layout.text, at, blockKey: block?.getKey() };
+        });
+        newlineIntent = intent;
+        // Real beforeinput commits are queued by Lexical after this capture
+        // listener. A microtask here ran first and erased the gesture before
+        // its transform, even though synchronous synthetic-key tests passed.
+        // Expire at the next task; only the exact captured native break matches.
+        newlineTimer = win.setTimeout(() => { newlineTimer = null; if (newlineIntent === intent) newlineIntent = null; }, 0);
+      } catch { newlineIntent = null; }
+    };
+    next.addEventListener('keydown', newline, { capture: true, passive: true });
+    next.addEventListener('beforeinput', newline, { capture: true, passive: true });
     next.addEventListener('pointerdown', pointer, { capture: true, passive: true });
     next.addEventListener('click', pointerEnd, { capture: true, passive: true });
     next.addEventListener('compositionstart', start, true);
@@ -400,6 +434,8 @@ export function mountNativeAdapter(editor, { onError = () => {} } = {}) {
       win.cancelAnimationFrame(frame); frame = null; win.clearTimeout(timer); timer = null;
       win.clearTimeout(backstop); backstop = null; win.clearTimeout(compositionTimer); compositionTimer = null;
       win.clearTimeout(pointerTimer); pointerStart = null;
+      win.clearTimeout(newlineTimer); newlineTimer = null; newlineIntent = null;
+      next.removeEventListener('keydown', newline, true); next.removeEventListener('beforeinput', newline, true);
       next.removeEventListener('pointerdown', pointer, true); next.removeEventListener('click', pointerEnd, true);
       next.removeEventListener('compositionstart', start, true); next.removeEventListener('compositionupdate', update, true);
       next.removeEventListener('compositionend', end, true); next.removeEventListener('blur', blurred, true);
@@ -419,9 +455,9 @@ export function mountNativeAdapter(editor, { onError = () => {} } = {}) {
       if (disposed || failed) return;
       if (composing || editor.isComposing()) { pendingIME = true; return; }
       try {
-        const layout = readLayout(node);
+        let layout = readLayout(node);
+        if (continueList(node, layout, selectionRange(editor._pendingEditorState?._selection, layout))) layout = readLayout(node);
         applyPlan(node, getPlan(layout.text), layout);
-        continueList(node, layout, selectionRange(editor._pendingEditorState?._selection, layout));
       } catch { fail(); }
     });
   } catch { fail(); }

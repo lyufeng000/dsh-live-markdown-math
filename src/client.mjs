@@ -18,14 +18,21 @@ export function nativeEditor(ctx, sessionId) {
   } catch { return null; }
 }
 
-export function createManager() {
-  const active = new Map(); let disposed = false;
+export function createManager({ onError = () => {} } = {}) {
+  const active = new Map(); let disposed = false, warned = false;
+  // A structural match that later fails must be visible once, without turning a
+  // broken adapter into a console flood while several sessions mount.
+  const report = message => {
+    if (warned) return;
+    warned = true;
+    try { onError(message); } catch { /* diagnostics must not break the composer */ }
+  };
   return {
     acquire(editor) {
       if (!editor || disposed) return () => {};
       let entry = active.get(editor);
       if (!entry) {
-        const adapter = mountNativeAdapter(editor);
+        const adapter = mountNativeAdapter(editor, { onError: report });
         if (!adapter) return () => {};
         entry = { adapter, refs: 0 }; active.set(editor, entry);
       }
@@ -64,7 +71,11 @@ export function apply(ctx) {
   const style = document.createElement('style');
   style.dataset.plugin = 'dsh-live-markdown-math'; style.dataset.revision = revision;
   style.textContent = `${katexCss}\n${css}`; document.head.append(style);
-  const manager = createManager();
+  const manager = createManager({
+    onError: message => {
+      try { console.warn(`[dsh-live-markdown-math] native adapter disabled: ${message}`); } catch { /* no console */ }
+    },
+  });
 
   // Sent user messages get the same TeX rendering the composer shows, view-only.
   const chat = createChatMath(document);

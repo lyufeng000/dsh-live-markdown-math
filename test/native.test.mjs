@@ -9,6 +9,9 @@ const api = runtimePath ? loadNativeRuntime() : null;
 after(() => dom.window.close());
 const native = (name, fn) => test(name, { skip: !api && 'Set DSH_NATIVE_RUNTIME to reviewed extracted DSH rc.2 module' }, fn);
 const tick = () => new Promise(resolve => setTimeout(resolve, 45));
+// Newline continuation must be driven by the resident native keymap, not an
+// arbitrary programmatic insert (paste/draft restore also use that path).
+const newline = f => f.root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true }));
 const snapshot = f => f.editor.getEditorState().read(() => ({
   source: readLayout(api.getRoot()).text,
   range: selectionRange(api.getSelection(), readLayout(api.getRoot())),
@@ -82,8 +85,30 @@ native('native claim, text refs, reference chip identity and occurrences are pre
   const f = await fixture('/help **文字** @thing ', { claim: '/help ', lexicon: new Map([['@', ['thing']]]) });
   try {
     const nodes = snapshot(f).nodes;
-    assert.equal(nodes[0].style, 'color: var(--dsw-alias-state-business-primary)');
+    assert.equal(nodes[0].style, '', '0.2.1 no longer styles the claimed token as a TextNode');
     assert.ok(nodes.some(n => n.type === 'composer-text-ref' && n.text === '@thing' && !ownedStyle(n.style)));
+    // 0.2.1 represents a claimed command as an atomic CommandChipNode instead of
+    // a styled leading TextNode. Insert the chip the same way the shell does.
+    const claim = { token: '/help ', name: 'help', submit() {} };
+    f.editor.update(() => {
+      const first = api.getRoot().getFirstChild().getFirstChild();
+      assert.equal(first.getTextContent(), '/help ');
+      const chip = new api.CommandChipNode(claim);
+      first.replace(chip);
+      chip.insertAfter(api.createText(' '));
+    }, { discrete: true });
+    const types = f.editor.getEditorState().read(() => {
+      const found = [];
+      const walk = node => {
+        found.push(node.getType());
+        if (typeof node.getChildren === 'function') for (const child of node.getChildren()) walk(child);
+      };
+      walk(api.getRoot());
+      return found;
+    });
+    assert.ok(types.includes('command-chip'), 'the claim is an atomic command chip');
+    assert.equal(f.runtime.projection.command?.token, '/help ', 'the projection exposes the command claim');
+    assert.equal(f.runtime.projection.clipboardText, '/help **文字** @thing ');
     f.editor.update(() => api.getRoot().getLastChild().append(new api.ReferenceChipNode({ source: 'file', ref: 'fixture.md', label: 'fixture.md', clipboardText: '@fixture.md' })), { discrete: true });
     const before = f.runtime.projection;
     const key = f.editor.getEditorState().read(() => api.getRoot().getLastChild().getLastChild().getKey());
@@ -285,12 +310,12 @@ native('a composition that never reports its end cannot freeze the view', async 
 
 native('standard list syntax is recognised and keeps its source', async () => {
   // A marker only becomes a list once its own space is typed, exactly like '#'.
-  for (const text of ['-', '*', '+', '1.', '12.', '1.5', '1.打']) {
+  for (const text of ['-', '*', '+', '1.5', '1.打']) {
     const plan = makePlan(text);
     assert.equal(plan.markers.length, 0, `${text} must stay plain source before the space`);
     assert.ok(!plan.segments.some(segment => segment.roles.some(role => /^(u|o)lm$/.test(role))), `${text} must not gain a list role`);
   }
-  for (const [text, role] of [['- item', 'ulm'], ['* item', 'ulm'], ['1. item', 'olm'], ['12. item', 'olm']]) {
+  for (const [text, role] of [['- item', 'ulm'], ['* item', 'ulm'], ['1. item', 'olm'], ['12. item', 'olm'], ['1.', 'olm'], ['12.', 'olm'], ['给网页做一个功能：\n1.', 'olm'], ['给网页做一个功能：\n1. ', 'olm']]) {
     const plan = makePlan(text);
     assert.equal(plan.markers.length, 1, `${text} must hide one list marker`);
     assert.ok(plan.segments.some(segment => segment.roles.includes(role)), `${text} must carry the ${role} role`);
@@ -303,9 +328,9 @@ native('standard list syntax is recognised and keeps its source', async () => {
     assert.equal(marker.getAttribute('data-lmm-role'), 'ulm');
     assert.equal(f.runtime.projection.clipboardText, '- 第一项');
     // Enter already continues the list, so the next item only needs its text.
-    type(f, '\n第二项'); await tick();
+    newline(f); await tick(); type(f, '第二项'); await tick();
     assert.equal(f.runtime.projection.clipboardText, '- 第一项\n- 第二项');
-    type(f, '\n\n1. 第三项'); await tick();
+    newline(f); await tick(); newline(f); await tick(); type(f, '1. 第三项'); await tick();
     const ordered = [...f.root.querySelectorAll('[data-lmm-role~="olm"]')];
     assert.equal(ordered.length, 1, 'one ordered marker');
     assert.equal(ordered[0].style.getPropertyValue('--lmm-list-label'), '"1."');
@@ -313,6 +338,37 @@ native('standard list syntax is recognised and keeps its source', async () => {
     assert.equal(f.runtime.projection.clipboardText, '- 第一项\n- 第二项\n1. 第三项');
     assert.equal(f.adapter.failed, false);
   } finally { f.dispose(); }
+});
+
+native('ordered items continue at a line end before later paragraphs or references', async () => {
+  for (const text of ['1. 第一项\n后续段落', '前文\n1. 第一项\n后续段落']) {
+    const f = await fixture(text);
+    try {
+      if (text.startsWith('前文')) f.editor.update(() => api.getRoot().getFirstChild().append(new api.ReferenceChipNode({ source: 'file', ref: 'fixture.md', label: 'fixture.md', clipboardText: '@fixture.md' })), { discrete: true });
+      const before = f.runtime.projection.clipboardText;
+      f.editor.update(() => {
+        const node = api.getRoot().getAllTextNodes().find(n => n.getTextContent().includes('第一项'));
+        node.select(node.getTextContentSize(), node.getTextContentSize());
+      }, { discrete: true });
+      newline(f); await tick();
+      assert.equal(f.runtime.projection.clipboardText, before.replace('第一项\n', '第一项\n2. \n'));
+      assert.equal(f.adapter.failed, false);
+    } finally { f.dispose(); }
+  }
+});
+
+native('empty ordered marker after a paragraph renders and exits without numbering plain text', async () => {
+  const f = await fixture('给网页做一个功能：\n1.');
+  try {
+    await tick();
+    assert.ok(f.root.querySelector('[data-lmm-role~="olm"]'));
+    assert.equal(f.runtime.projection.clipboardText, '给网页做一个功能：\n1.');
+    newline(f); await tick();
+    assert.equal(f.runtime.projection.clipboardText, '给网页做一个功能：\n');
+  } finally { f.dispose(); }
+  for (const text of ['```\n1.\n```', '    1.', '<div>\n1.\n</div>', '$$\n1.\n$$']) {
+    assert.ok(!makePlan(text).segments.some(segment => segment.roles.includes('olm')), text);
+  }
 });
 
 native('hidden syntax collects no spell-check markers', async () => {
@@ -343,20 +399,20 @@ native('space-delimited block syntax stays source until its space is typed', asy
 native('Enter continues a list and an empty item ends it', async () => {
   const f = await fixture('1. 内容');
   try {
-    type(f, '\n'); await tick();
+    newline(f); await tick();
     assert.equal(f.runtime.projection.clipboardText, '1. 内容\n2. ', 'the new line continues the numbering');
-    type(f, '\n'); await tick();
+    newline(f); await tick();
     assert.equal(f.runtime.projection.clipboardText, '1. 内容\n', 'Enter on the empty item drops its marker');
     assert.equal(f.adapter.failed, false);
   } finally { f.dispose(); }
   const bullets = await fixture('- 项目');
   try {
-    type(bullets, '\n'); await tick();
+    newline(bullets); await tick();
     assert.equal(bullets.runtime.projection.clipboardText, '- 项目\n- ');
   } finally { bullets.dispose(); }
   const plain = await fixture('普通文本');
   try {
-    type(plain, '\n'); await tick();
+    newline(plain); await tick();
     assert.equal(plain.runtime.projection.clipboardText, '普通文本\n', 'plain paragraphs are never numbered');
   } finally { plain.dispose(); }
 });

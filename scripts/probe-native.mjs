@@ -71,8 +71,11 @@ try {
     return { hiddenMarkers: state.markers.length, text: state.text };
   });
   await check('Enter continues a list, and an empty item ends it', async () => {
-    const pressEnter = () => evaluate(`(() => { probe.editor.update(() => { probe.api.getRoot().selectEnd(); probe.api.getSelection().insertLineBreak(); }, {discrete: true}); return probe.project().text; })()`);
-    await evaluate(`probe.set(${JSON.stringify('1. 内容')}, 4)`);
+    const pressEnter = async () => {
+      await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 8 });
+      await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 8 });
+    };
+    await evaluate(`probe.set(${JSON.stringify('1. 内容')}, 5)`);
     await pressEnter(); await delay(140);
     const continued = await evaluate('probe.snapshot()');
     assert.equal(continued.text, '1. 内容\n2. ', 'the new line continues the numbering');
@@ -82,6 +85,26 @@ try {
     assert.equal(ended.text, '1. 内容\n', 'Enter on the empty item drops its marker');
     assert.deepEqual(ended.errors, []);
     return {continued: continued.text, ended: ended.text};
+  });
+  await check('bare ordered marker previews after a paragraph without a doubled label at the caret', async () => {
+    const source = '给网页做一个功能：\n1.';
+    await evaluate(`probe.set(${JSON.stringify(source)}, ${source.length - 1})`);
+    const active = await evaluate(`(() => { const e=probe.root.querySelector('[data-lmm-role~="olm"]'); return {text:probe.project().text, label: e && getComputedStyle(e,'::before').content}; })()`);
+    assert.equal(active.text, source); assert.equal(active.label, 'none');
+    await evaluate('document.activeElement.blur();probe.adapter.refresh();probe.wait()');
+    const inactive = await evaluate(`(() => { const e=probe.root.querySelector('[data-lmm-role~="olm"]'); return {label:getComputedStyle(e,'::before').content,width:e.getBoundingClientRect().width}; })()`);
+    assert.ok(inactive.label.includes('1.')); assert.ok(inactive.width > 0);
+    return {active, inactive};
+  });
+  await check('real Shift+Enter continues an item before later paragraphs', async () => {
+    await evaluate(`probe.set(${JSON.stringify('1. 第一项\n后续段落')}, 6)`);
+    await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 8 });
+    await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, modifiers: 8 });
+    await delay(140);
+    const state = await evaluate('probe.snapshot()');
+    assert.equal(state.text, '1. 第一项\n2. \n后续段落');
+    assert.deepEqual(state.errors, []);
+    return {text:state.text};
   });
   await check('hidden TeX is not spell-checked and the rendered formula is opaque', async () => {
     await evaluate(`probe.set(${JSON.stringify('公式 $\\frac{1}{2}$ 结束')}, 19)`);

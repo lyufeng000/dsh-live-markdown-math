@@ -18,19 +18,38 @@ import { renderFormula } from './math.mjs';
 
 export const CHAT_MATH_MARK = 'data-lmm-chat-math';
 const USER_MESSAGE = '[data-chat-flow-kind="user"]';
-const CONVERSATION = '[data-chat-flow]';
-// Anything code, editable, already rendered or already ours stays alone.
-const SKIP = 'pre, code, [contenteditable="true"], .katex, .lmm-chat-formula';
+// DSH projectUserText owns a CSS-module plainRun span with one string child.
+// Fail open if that private display seam changes; never search arbitrary labels.
+const SKIP = 'pre, code, [contenteditable], [data-ref-chip], [data-message-attachments], button, a, [role="button"], .katex, .lmm-chat-formula';
 const MAX_FORMULAS = 80;
+const documents = new WeakMap();
+const recordsFor = doc => {
+  let records = documents.get(doc);
+  if (!records) { records = new Map(); documents.set(doc, records); }
+  return records;
+};
+const intact = (element, record) => element.childNodes.length === record.rendered.length &&
+  record.rendered.every((node, i) => element.childNodes[i] === node &&
+    (node.nodeType !== 3 || node.data === record.texts[i]));
+function restoreRun(element, record) {
+  // Reuse the original native Text node. Never restore stale text over a newer
+  // React repaint; partial foreign changes only get our own wrappers unwrapped.
+  if (intact(element, record)) element.replaceChildren(...record.original);
+  else for (const [wrapper, source] of record.formulas) {
+    if (wrapper.parentNode === element) wrapper.replaceWith(element.ownerDocument.createTextNode(source));
+  }
+  element.removeAttribute(CHAT_MATH_MARK);
+}
 
 /** Innermost text-carrying elements of the user messages that still need work. */
 function candidates(doc) {
   const found = [];
   for (const message of doc.querySelectorAll(USER_MESSAGE)) {
-    for (const element of message.querySelectorAll('*')) {
-      if (element.firstElementChild) continue;
-      // Already rendered here, or nothing that can be TeX.
-      if (element.querySelector('.lmm-chat-formula')) continue;
+    for (const element of message.querySelectorAll('span[class]')) {
+      // Reviewed production CSS: ._plainRun_fbulu_6 (CSS-module name/hash/line).
+      if (![...element.classList].some(name => name === 'plainRun' || /^_plainRun_[a-zA-Z0-9]+_\d+$/.test(name))) continue;
+      if (element.childNodes.length !== 1 || element.firstChild.nodeType !== 3) continue;
+      // Only the native one-string-child contract is safe for React repainting.
       const text = element.textContent;
       if (!text.includes('$') && !text.includes('\\')) continue;
       if (element.closest(SKIP)) continue;
@@ -45,7 +64,7 @@ function candidates(doc) {
  * @returns How many formulas this run produced.
  */
 function replaceRun(doc, element, text, spans) {
-  const nodes = [];
+  const nodes = [], formulas = new Map();
   let at = 0, applied = 0;
   for (const span of spans) {
     if (span.from > at) nodes.push(doc.createTextNode(text.slice(at, span.from)));
@@ -66,7 +85,7 @@ function replaceRun(doc, element, text, spans) {
         node.style.pointerEvents = 'none';
       }
       wrapper.append(hidden, rendered);
-      nodes.push(wrapper);
+      nodes.push(wrapper); formulas.set(wrapper, source);
       applied += 1;
     } else {
       nodes.push(doc.createTextNode(source));
@@ -75,7 +94,9 @@ function replaceRun(doc, element, text, spans) {
   }
   if (!applied) return 0;
   if (at < text.length) nodes.push(doc.createTextNode(text.slice(at)));
+  const original = [...element.childNodes];
   element.replaceChildren(...nodes);
+  recordsFor(doc).set(element, { original, rendered: nodes, texts: nodes.map(node => node.nodeType === 3 ? node.data : null), formulas });
   element.setAttribute(CHAT_MATH_MARK, String(applied));
   return applied;
 }
@@ -85,6 +106,12 @@ function replaceRun(doc, element, text, spans) {
  * @returns How many formulas were rendered in this pass.
  */
 export function renderChatMath(doc) {
+  const records = recordsFor(doc);
+  for (const [element, record] of records) {
+    if (!element.isConnected || !intact(element, record)) {
+      restoreRun(element, record); records.delete(element);
+    }
+  }
   let applied = 0;
   for (const element of candidates(doc)) {
     const text = element.textContent;
@@ -93,7 +120,7 @@ export function renderChatMath(doc) {
     // Multi-line math stays source here exactly as it does in the composer.
     const spans = parsed.math.filter(span => !/[\r\n\uFFFC]/.test(text.slice(span.from, span.to)));
     if (!spans.length) continue;
-    applied += replaceRun(doc, element, text, spans);
+    applied += replaceRun(doc, element, text, spans.slice(0, MAX_FORMULAS - applied));
     if (applied >= MAX_FORMULAS) break;
   }
   return applied;
@@ -106,29 +133,43 @@ export function renderChatMath(doc) {
 export function createChatMath(doc, { debounce = 150 } = {}) {
   const win = doc.defaultView;
   let timer = null, observer = null, stopped = false;
+  const observe = () => {
+    if (!stopped && doc.body) observer?.observe(doc.body, { childList: true, subtree: true, characterData: true });
+  };
   const run = () => {
     if (stopped) return 0;
+    observer?.disconnect(); // our own KaTeX writes must not schedule another scan
     try { return renderChatMath(doc); } catch { return 0; }   // display-only: never break the app
+    finally { observe(); }
   };
   const schedule = () => {
     if (stopped || timer !== null) return;
     timer = win.setTimeout(() => { timer = null; run(); }, debounce);
   };
-  run();
   if (typeof win.MutationObserver === 'function') {
-    observer = new win.MutationObserver(schedule);
-    const host = doc.querySelector(CONVERSATION) ?? doc.body;
-    if (host) observer.observe(host, { childList: true, subtree: true, characterData: true });
+    observer = new win.MutationObserver(mutations => {
+      const hasMessage = node => node.nodeType === 1 && (node.matches(USER_MESSAGE) || node.querySelector(USER_MESSAGE));
+      if (mutations.some(mutation => {
+        const target = mutation.target.nodeType === 1 ? mutation.target : mutation.target.parentElement;
+        return target?.closest(USER_MESSAGE) || [...mutation.addedNodes, ...mutation.removedNodes].some(hasMessage);
+      })) schedule();
+    });
   }
+  // Observe the resident body, not the first replaceable session flow.
+  run();
   return {
     run,
     schedule,
     dispose() {
+      if (stopped) return;
       stopped = true;
       if (timer !== null) win.clearTimeout(timer);
       timer = null;
       observer?.disconnect();
       observer = null;
+      const records = recordsFor(doc);
+      for (const [element, record] of records) restoreRun(element, record);
+      records.clear();
     },
   };
 }

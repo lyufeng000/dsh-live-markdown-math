@@ -1,10 +1,12 @@
 # DSH 原生 Markdown / LaTeX 输入增强
 
-## 当前状态（2026-10-16）
+## 当前状态（2026-10-17）
 
 **13:38 已授权切换为无额外开关的原生增强版，随后连续修复：14:43 光标可见、14:52「`#` 需空格」、15:05 合成保持渲染并识别列表、15:25 合成状态自愈并让列表同样需空格、15:45 实例自愈并实现列表续行、16:05 隐藏源码不再收集拼写波浪线、16:15 公式收尾保持源码几何、16:21 自己发出的消息也渲染公式，当前修订 `native-rc2-9`，包版本仍为 0.1.0。** 用户确认接受插件内私有适配风险，并逐次确认所有草稿“已保存或无需保留”。13:38 替换客户端及对应第三方声明；其后八次各只替换客户端（声明与 Host 入口逐字节未变）；都未改 DSH 本体或 profile、未刷新/重启应用、未发送测试消息。
 
 本目录以 `link:` 被正在运行的 desktop profile 引用。隔离回归随修订推进：rc2-1 为 90/90 与 Chrome 6/6，rc2-2 为 91/91 与 7/7，rc2-3 为 92/92 与 8/8，rc2-4 为 94/94 与 10/10，rc2-5 为 95/95 与 10/10，rc2-6 为 98/98 与 11/11，rc2-7 为 99/99 与 12/12，rc2-8 为 99/99 与 12/12，rc2-9 为 **104/104 与 12/12**。切换后实时 Slot 已出现 `live-markdown-math-native` active，旧按钮注册消失，说明响应页面已注册新版客户端；**DOM 根增强属性、真实图片混输和 Windows 输入法仍待现场验收**。发送后的消息渲染由 DSH 自己的渲染器负责（其流式阶段不解析数学），不属本插件。本轮详细核验报告保存在作者本地，**未随本仓库发布**。
+
+**2026-10-17 已针对 DSH `0.2.1-rc.2` 完成兼容收口：** 声明 `engines.dsh` 为 `>=0.2.1-rc.2 <0.3.0`；原生 fixture 更新为 0.2.1 提取客户端（SHA256 `843dbcd884e05d77e525bf84b9e6dce180fd49ac8486a3c75591c291f09c9afa`）并适配 0.2.1 新增的 `CommandChipNode`；claim 回归改为断言命令 chip 投影；适配器失败现在经 `console.warn` 上报一次。0.2.1 原生套件为 **122/122**，无 fixture 的默认套件为 67 通过、55 跳过（原生组按设计跳过）；隔离 Chrome 对 0.2.1 `DraftEditorRuntime` 的 Markdown、TeX、列表续行与卸载恢复均通过。未改 DSH 本体、profile、安装状态或启用状态。
 
 ## 新方案怎样使用
 
@@ -29,12 +31,12 @@
 
 ## 实现与兼容边界
 
-- 增强当前 DSH `0.2.0-rc.2` 的 resident Lexical `0.49.0` / `DraftEditorRuntime`，不捆绑另一份 Lexical，不替换 contenteditable 根。
+- 增强当前 DSH `0.2.1-rc.2` 的 resident Lexical `0.49.0` / `DraftEditorRuntime`，不捆绑另一份 Lexical，不替换 contenteditable 根。0.2.1 将已认领命令表示为原子 `CommandChipNode`，插件在内部布局投影中把它与引用 chip 一样记为 U+FFFC。
 - 私有入口为会话 binding 的 Context 与 `conversation.input.for(binding.ctx).editor`。`conversation.input.overlay` 只承载生命周期组件，该组件返回 null；它本身不是公开的编辑器扩展接口。
 - 对普通、安全 TextNode 做有界分段，使用插件自有样式元数据。引用节点、claim、chip 和其他来源的样式保持原状；源文、occurrences 与 attachmentIds 不由插件重建。
 - 公式显示在原生根之外的 `pointer-events:none` 层，不向 Lexical 管理的 DOM 插入 KaTeX 子节点；按原生滚动容器裁切。单击公式只在默认事件之后调整原生选区；Shift 点击、拖动、双击不由此逻辑接管。
 - 输入法合成期间暂停拆分与装饰；合成结束后延迟 32ms 结算。卸载不回写草稿，不重建根或历史栈。
-- 当前采用 namespace、方法、节点类型的**结构兼容检查**，不是精确宿主版本号锁。检查不通过则不增强；结构相同也不保证未来版本语义相同，DSH 升级后必须重新验证。
+- 包元数据通过 `engines.dsh` = `>=0.2.1-rc.2 <0.3.0` 声明兼容宿主范围；运行时仍以 namespace、方法、节点类型的**结构兼容检查**兜底，检查不通过则不增强。结构相同也不保证未来版本语义相同，DSH 升级后必须重新验证。
 - KaTeX `trust:false`、宏展开/尺寸限制和 DOMPurify；不执行原始 HTML，不加载远程图片、字体、CDN、遥测或服务。React 使用宿主单例；Host 入口没有业务逻辑。
 
 ### 已知限制
@@ -44,26 +46,27 @@
 3. 列表、任务项、表格保留文本，不提供交互控件；Markdown 图片不加载，链接不跳转。不是完整富文本编辑器。
 4. 文档上限 100000 个 JavaScript 字符单位、公式上限 200、单公式上限 4000，原生分段上限 6000；扫描预算耗尽时停止增强，保留输入。
 5. 当前 GUI 明暗主题、窄屏、真实 Windows 输入法、系统剪贴板图片及真实发送仍待验收。
+6. 0.2.1 的已发送用户文本经 `conversation.user.text` Factory 渲染；插件只在 `[data-chat-flow-kind="user"]` 下满足单字符串子节点的 `plainRun` span 上做显示层替换。若 DSH 改变该私有 DOM 结构，发送消息的公式会静默停止渲染（原文与复制不受影响）；输入框适配失败则只上报一次 `console.warn` 并回退原生输入。
 
 ## 安全构建与测试
 
 已验证 Node.js `24.21.0`，使用现有 npm 锁定依赖。**不要为测试直接运行默认 `npm run build`**：它写入链接中的 `lib/`，等同于发布到在用插件。
 
-在插件目录运行隔离检查（运行时文件必须是审阅过的本机 rc.2 提取副本，不包含在交付包内）：
+在插件目录运行隔离检查（运行时文件必须是审阅过的本机 `0.2.1-rc.2` 提取副本，不包含在交付包内）：
 
 ```powershell
-$env:DSH_NATIVE_RUNTIME='<已审阅的 rc.2 运行时提取副本>\runtime\lib\client.js'
+$env:DSH_NATIVE_RUNTIME='<已审阅的 0.2.1-rc.2 运行时提取副本>\runtime\lib\client.js'
 $env:DSH_LMM_BUILD_DIR='<隔离输出目录>'
 node scripts/check.mjs --browser
 ```
 
-- `npm run check`：强制要求原生运行时 fixture；向显式候选目录或自动生成的临时目录构建，再运行 native/client/markdown/math/package/styles 六组测试，结束时复核在线客户端摘要未变。
+- `npm run check`：强制要求原生运行时 fixture；向显式候选目录或自动生成的临时目录构建，再运行 audit/native/client/markdown/math/chat-math/package/styles 八组测试，结束时复核在线客户端摘要未变。
 - `npm run check:browser`：再启动独立 headless Chrome，验证实际 DOM 排版、点击、光标、删除与滚动；只操作自己的临时页面/浏览器，不连接 DSH。可用 `DSH_TEST_CHROME` 指定浏览器程序。
 - `node scripts/build.mjs --out <隔离目录>`：构建候选客户端、Host 空入口与对应第三方声明；隔离输出禁止位于链接插件目录内。
-- `npm test`：仅跑上述六组测试，不构建；调用者必须提供候选产物和正确 fixture。验收优先使用强制校验的 `check`。
+- `npm test`：仅跑上述八组测试，不构建；原生相关组需要正确 fixture（未设置 `DSH_NATIVE_RUNTIME` 时按设计跳过）。验收优先使用强制校验的 `check`。
 - `npm run test:legacy`：旧架构历史回归，不能作为新架构验收。旧离线 CodeMirror demo 也不是当前原生方案的演示。
 
-原生 fixture SHA256：`64843c950b829f44feed3248af6c46bbd620cf85e7c687b4f7f60e1ec4eb4782`。fixture 的 resident editor 错误处理器会记录异常，测试释放时断言无错误，避免吞错造成假通过。
+原生 fixture SHA256：`843dbcd884e05d77e525bf84b9e6dce180fd49ac8486a3c75591c291f09c9afa`（DSH `0.2.1-rc.2` 提取客户端）。fixture 的 resident editor 错误处理器会记录异常，测试释放时断言无错误，避免吞错造成假通过。
 
 JSDOM 验证包括源文/选区、倒向选择、emoji/中文、引用/附件投影、原生撤销重做、合成事件屏障、复制导出和卸载。模拟图片命令只证明透传与继续编辑，不验证真实上传。隔离 Chrome 检查也不等于当前 GUI 或操作系统输入法验收。
 
