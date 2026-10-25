@@ -1,8 +1,7 @@
 {
   "name": "dsh-live-markdown-math",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "在输入框中使用\\[\\] 或 $$闭合公式后可及时渲染数学公式，md语法可直接识别。",
-  "private": true,
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -29,8 +28,14 @@
     "lexical"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "pack:release": "node scripts/pack.mjs",
+    "prepublishOnly": "node scripts/pack.mjs --publish-check",
     "test": "node --test --test-concurrency=1 test/audit.test.mjs test/native.test.mjs test/client.test.mjs test/markdown.test.mjs test/math.test.mjs test/chat-math.test.mjs test/package.test.mjs test/styles.test.mjs",
     "check": "node scripts/check.mjs",
     "check:browser": "node scripts/check.mjs --browser",

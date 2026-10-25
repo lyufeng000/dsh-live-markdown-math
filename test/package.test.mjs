@@ -19,7 +19,9 @@ test('manifest and pinned dependency lock agree', async () => {
   const lock = JSON.parse(await readFile(new URL('package-lock.json', root), 'utf8'));
   assert.equal(lock.version, manifest.version);
   assert.deepEqual(lock.packages[''].devDependencies, manifest.devDependencies);
-  assert.equal(manifest.private, true);
+  assert.notEqual(manifest.private, true);
+  assert.equal(lock.packages[''].version, manifest.version);
+  assert.deepEqual(manifest.publishConfig, { access: 'public', registry: 'https://registry.npmjs.org/' });
   assert.equal(manifest.dependencies, undefined);
   assert.equal(manifest.scripts.install, undefined);
 });
