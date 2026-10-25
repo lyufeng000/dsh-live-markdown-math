@@ -35,7 +35,10 @@ const cssText = {
       let css = result.outputFiles[0].text;
       if (filename.includes('katex')) {
         css = css.replaceAll('KaTeX_', 'LMM_KaTeX_');
-        css = css.replace(/([^{}]+)\{/g, (whole, selector) => selector.trim().startsWith('@') ? whole : `${selector.split(',').map(s => `.lmm-formula ${s.trim()}`).join(',')}{`);
+        // Consume declaration blocks as well as selectors. Searching only for
+        // an opening brace backtracks quadratically through embedded font data.
+        css = css.replace(/([^{}]+)([{}])/g, (whole, selector, brace) => brace === '}' || selector.trim().startsWith('@')
+          ? whole : `${selector.split(',').map(s => `.lmm-formula ${s.trim()}`).join(',')}{`);
       }
       return { contents: `export default ${JSON.stringify(css)};`, loader: 'js' };
     });

@@ -87,21 +87,12 @@ export function mountNativeAdapter(editor, { onError = () => {} } = {}) {
     // Never log draft contents or raw exception messages.
     onError('原生编辑器适配已停止；文本、图片与发送仍由 DSH 管理。');
   }
-  /** A line that is nothing but a list marker: Enter on it ends the list. */
-  const EMPTY_ITEM = /^(?:[-*+] |\d{1,9}\.[ \t]*)$/;
-  /** Marker text that would continue the item at the start of `text`, or null. */
-  function nextMarker(text) {
-    const bullet = /^([-*+]) /.exec(text);
-    if (bullet) return `${bullet[1]} `;
-    const ordered = /^(\d{1,9})\. /.exec(text);
-    return ordered ? `${Number(ordered[1]) + 1}. ` : null;
-  }
   /**
    * Enter continues a list the way a plain Markdown editor does: the new empty
    * line inherits the next marker, and Enter on that still-empty item drops the
    * marker again and ends the list. The composer breaks lines *inside* a block
    * (a linebreak leaf), so this works on the caret's line rather than on blocks.
-   * The only text this adapter ever writes is the marker itself: the user's own
+   * The adapter writes only the inherited list/container prefix: the user's own
    * words are never touched, and because it runs inside the same update as the
    * line break, one undo removes both.
    */
@@ -116,21 +107,40 @@ export function mountNativeAdapter(editor, { onError = () => {} } = {}) {
     // precede other paragraphs/chips; it need not end the whole draft.
     if (!Text || !block || block.getKey() !== intent.blockKey ||
       layout.text !== `${intent.text.slice(0, intent.at)}\n${intent.text.slice(intent.at)}`) return false;
-    const previousStart = intent.text.lastIndexOf('\n', intent.at - 1) + 1;
-    const previous = intent.text.slice(previousStart, intent.at), marker = nextMarker(previous) ??
-      (EMPTY_ITEM.test(previous) ? '1. ' : null);
-    // The Markdown parser, not the regex, decides if this is a list. In
-    // particular, literal lines inside code/HTML/math must never be rewritten.
-    if (!marker || !getPlan(intent.text).segments.some(segment => segment.from === previousStart &&
-      segment.roles.some(role => role === 'olm' || role === 'ulm'))) return false;
-    if (EMPTY_ITEM.test(previous)) {
-      const leaves = layout.leaves.filter(leaf => leaf.from >= previousStart && leaf.to <= last.to);
+    const previousStart = intent.text.lastIndexOf('\n', intent.at - 1) + 1, plan = getPlan(intent.text);
+    if (plan.limited) return false;
+    // Use the exact markers that the preview accepted. This also handles tabs,
+    // indented/nested lists, quote containers and both ordered delimiters.
+    const items = plan.lists.filter(item => item.from >= previousStart && item.to <= intent.at)
+      .sort((a, b) => a.from - b.from), item = items.at(-1);
+    if (!item) return false;
+    const source = intent.text.slice(item.from, item.to), tail = intent.text.slice(item.to, intent.at);
+    const space = /^[ \t]*/.exec(tail)[0], empty = space.length === tail.length;
+    const ordered = /^(\d{1,9})([.)])$/.exec(source);
+    if ((!/^[-*+]$/.test(source) && !ordered) || (!space && !empty)) return false;
+    if (empty) {
+      const leaves = layout.leaves.filter(leaf => leaf.to > item.from && leaf.from < last.to);
       if (leaves.some(leaf => leaf.node.getParent()?.getKey() !== block.getKey() || (leaf !== last && !canStyle(leaf)))) return false;
-      // Delete just this marker and the new break, never surrounding content.
-      const index = leaves[0].node.getIndexWithinParent();
-      for (const leaf of leaves) leaf.node.remove();
+      // Preserve indentation/quote/outer-list prefixes, even when a marker still
+      // shares its TextNode with that prefix. Never remove a chip or foreign node.
+      const nodes = leaves.map(leaf => leaf.from < item.from
+        ? leaf.node.splitText(item.from - leaf.from)[1] : leaf.node);
+      const index = nodes[0].getIndexWithinParent();
+      for (const node of nodes) node.remove();
       block.select(index, index);
     } else {
+      // An outer list marker on the same line becomes indentation on the next
+      // line; quote markers and the user's original whitespace stay intact.
+      let prefix = intent.text.slice(previousStart, item.from);
+      for (const outer of items.slice(0, -1)) {
+        const at = outer.from - previousStart;
+        prefix = `${prefix.slice(0, at)}${' '.repeat(outer.to - outer.from)}${prefix.slice(outer.to - previousStart)}`;
+      }
+      const next = ordered ? `${Number(ordered[1]) + 1}${ordered[2]}` : source;
+      // CommonMark accepts at most nine digits. Do not synthesize a plain-text
+      // ten-digit marker when the current list has reached that boundary.
+      if (ordered && String(Number(ordered[1]) + 1).length > 9) return false;
+      const marker = `${prefix}${next}${space || ' '}`;
       const node = new Text(marker);
       last.node.insertAfter(node);
       node.select(marker.length, marker.length);

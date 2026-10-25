@@ -5,12 +5,13 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { runtimeBody, runtimeExports } from '../test/native-runtime.mjs';
+import { resolveChrome, selectBuildDirectory } from './check.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const out = process.env.DSH_LMM_BUILD_DIR;
-if (!out || !path.isAbsolute(out)) throw new Error('Set DSH_LMM_BUILD_DIR to the isolated candidate directory');
-const chrome = process.env.DSH_TEST_CHROME || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-await fs.access(chrome);
+const requestedOut = process.env.DSH_LMM_BUILD_DIR;
+if (!requestedOut || !path.isAbsolute(requestedOut)) throw new Error('Set DSH_LMM_BUILD_DIR to an absolute isolated candidate directory');
+const out = await selectBuildDirectory({ requested: requestedOut });
+const chrome = await resolveChrome();
 const bundle = await build({ absWorkingDir: root, entryPoints: ['test/browser-native.mjs'], bundle: true, write: false, format: 'iife', platform: 'browser', target: 'chrome120' });
 const client = await fs.readFile(path.join(out, 'client.js'), 'utf8');
 const source = runtimeBody() + '\n' + runtimeExports;
@@ -18,12 +19,13 @@ const escape = script => script.replaceAll('</script', '<\\/script');
 const html = `<!doctype html><html><head><meta charset="UTF-8"><title>Isolated native composer probe</title><style>
 body{margin:0;padding:64px;font:16px/1.6 system-ui;color:#263140;background:#f6f7f9}#card{max-width:560px;background:#fff;border:1px solid #8893a5;border-radius:12px;padding:16px}[data-input-scroll]{max-height:220px;overflow-y:auto;overflow-x:hidden}#editor{outline:none;white-space:pre-wrap;overflow-wrap:anywhere;min-height:40px}#editor p{margin:0}#footer{padding-top:12px;color:#667085;font-size:13px}h2{font-size:18px}#outside{height:90px}
 </style></head><body><h2>原生输入框 · 隔离验证</h2><div id="card"><div data-input-scroll><div id="editor" contenteditable="true" tabindex="0"></div></div><div id="footer">保留原生输入、图片入口与发送逻辑（本页不连接 DSH）</div></div><div id="outside"></div><script>${escape(bundle.outputFiles[0].text)}</script><script>window.__ModuleLoader__={load({factory}){window.plugin=factory(name=>{if(name!=='react')throw Error(name);return window.React})}};</script><script>${escape(client)}</script><script>
-plugin.apply({slots:{register(){return ()=>{}},inject(name,fn){[...fn()];return ()=>{}}},effect(fn){fn()}});
-window.createNativeProbe(new Function('react_jsx_runtime','react',${JSON.stringify(source)}));
+window.createNativeProbe(new Function('react_jsx_runtime','react',${JSON.stringify(source)}), window.plugin).catch(error => { window.probeError = error.stack || error.message; });
 </script></body></html>`;
 const pageFile = path.join(out, 'native-probe.html'); await fs.writeFile(pageFile, html);
 const profile = await fs.mkdtemp(path.join(out, 'chrome-native-'));
 const child = spawn(chrome, ['--headless=new', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-sync', '--disable-extensions', '--remote-debugging-port=0', '--window-size=960,800', `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' });
+let launchError = null;
+child.on('error', error => { launchError = error; });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 let socket, session, seq = 0; const pending = new Map(), results = [];
 function call(method, params = {}, sid = session) {
@@ -38,6 +40,9 @@ async function evaluate(expression) {
   if (response.exceptionDetails) throw new Error(response.exceptionDetails.exception?.description || response.exceptionDetails.text);
   return response.result.value;
 }
+async function waitFor(expression, description) {
+  await evaluate(`probe.waitFor(() => (${expression}), ${JSON.stringify(description)})`);
+}
 async function check(name, fn) {
   try { const detail = await fn(); results.push({ name, passed: true, detail }); }
   catch (error) { results.push({ name, passed: false, error: error.message }); }
@@ -45,6 +50,8 @@ async function check(name, fn) {
 try {
   let lines;
   for (let i = 0; i < 100; i++) {
+    if (launchError) throw new Error(`Cannot launch isolated Chrome: ${launchError.message}`);
+    if (child.exitCode !== null) throw new Error(`Isolated Chrome exited before startup (${child.exitCode})`);
     try { lines = (await fs.readFile(path.join(profile, 'DevToolsActivePort'), 'utf8')).trim().split(/\r?\n/); break; }
     catch { await delay(50); }
   }
@@ -59,13 +66,23 @@ try {
   const { targetId } = await call('Target.createTarget', { url: 'about:blank' }, null);
   ({ sessionId: session } = await call('Target.attachToTarget', { targetId, flatten: true }, null));
   await call('Page.enable'); await call('Runtime.enable'); await call('Page.navigate', { url: pathToFileURL(pageFile).href });
-  for (let i = 0; i < 100 && !await evaluate('!!window.probe'); i++) await delay(50);
+  for (let i = 0; i < 100 && !await evaluate('!!window.probe || !!window.probeError'); i++) await delay(50);
+  assert.equal(await evaluate('window.probeError || null'), null, 'Candidate lifecycle must mount without errors');
+  assert.equal(await evaluate('!!window.probe'), true, 'Isolated native probe did not become ready');
   await evaluate('document.fonts.ready.then(()=>probe.wait())');
+
+  await check('candidate bundle mounts its native lifecycle on the resident editor', async () => {
+    await waitFor('probe.root.dataset.lmmNative === plugin.revision && document.querySelectorAll(".lmm-native-layer").length === 1', 'the candidate native lifecycle');
+    const state = await evaluate(`({revision: probe.root.dataset.lmmNative, expected: plugin.revision, layers: document.querySelectorAll('.lmm-native-layer').length})`);
+    assert.equal(state.revision, state.expected); assert.equal(state.layers, 1);
+    return state;
+  });
 
   await check('native browser typing formats Markdown without a toggle or source loss', async () => {
     await evaluate('probe.set("")');
     const text = '# 标题 **粗体** `code` 😀';
     await call('Input.insertText', { text }); await delay(160);
+    await waitFor('probe.root.querySelectorAll("[data-lmm-hide]").length >= 3', 'typed Markdown markers');
     const state = await evaluate('probe.snapshot()'); assert.equal(state.text, text);
     assert.ok(state.markers.length >= 3); assert.equal(state.failed, false); assert.deepEqual(state.errors, []);
     return { hiddenMarkers: state.markers.length, text: state.text };
@@ -77,6 +94,7 @@ try {
     };
     await evaluate(`probe.set(${JSON.stringify('1. 内容')}, 5)`);
     await pressEnter(); await delay(140);
+    await waitFor('probe.project().text === "1. 内容\\n2. " && [...probe.root.querySelectorAll("[data-lmm-hide]")].some(element => element.textContent === "2.")', 'the continued ordered-list label');
     const continued = await evaluate('probe.snapshot()');
     assert.equal(continued.text, '1. 内容\n2. ', 'the new line continues the numbering');
     assert.ok(continued.markers.some(marker => marker.source === '2.'), 'the inherited marker renders as a list label');
@@ -89,9 +107,11 @@ try {
   await check('bare ordered marker previews after a paragraph without a doubled label at the caret', async () => {
     const source = '给网页做一个功能：\n1.';
     await evaluate(`probe.set(${JSON.stringify(source)}, ${source.length - 1})`);
+    await waitFor(`(() => { const element = probe.root.querySelector('[data-lmm-role~="olm"]'); return element && getComputedStyle(element, '::before').content === 'none'; })()`, 'editable ordered-list source at the caret');
     const active = await evaluate(`(() => { const e=probe.root.querySelector('[data-lmm-role~="olm"]'); return {text:probe.project().text, label: e && getComputedStyle(e,'::before').content}; })()`);
     assert.equal(active.text, source); assert.equal(active.label, 'none');
-    await evaluate('document.activeElement.blur();probe.adapter.refresh();probe.wait()');
+    await evaluate('document.activeElement.blur();probe.refresh();probe.wait()');
+    await waitFor(`(() => { const element = probe.root.querySelector('[data-lmm-role~="olm"]'); return element && getComputedStyle(element, '::before').content.includes('1.'); })()`, 'the ordered-list label after blur');
     const inactive = await evaluate(`(() => { const e=probe.root.querySelector('[data-lmm-role~="olm"]'); return {label:getComputedStyle(e,'::before').content,width:e.getBoundingClientRect().width}; })()`);
     assert.ok(inactive.label.includes('1.')); assert.ok(inactive.width > 0);
     return {active, inactive};
@@ -118,13 +138,14 @@ try {
     return state;
   });  await check('standard lists render a view-only label without losing source', async () => {
     await evaluate(`probe.set(${JSON.stringify('- 第一项\n1. 第二项')})`);
+    await waitFor(`probe.root.querySelector('[data-lmm-role~="ulm"][data-lmm-hide="true"]') && probe.root.querySelector('[data-lmm-role~="olm"][data-lmm-hide="true"]')`, 'both painted list markers');
     const state = await evaluate(`(() => {
       const root = probe.root;
       const items = [...root.querySelectorAll('[data-lmm-hide]')].map(e => {
         const pseudo = getComputedStyle(e, '::before');
         return { role: e.getAttribute('data-lmm-role'), source: e.textContent, label: pseudo.content, fill: pseudo.webkitTextFillColor, ownFill: getComputedStyle(e).webkitTextFillColor, hidden: getComputedStyle(e).visibility };
       });
-      return { items, text: probe.project().text, errors: probe.errors, failed: probe.adapter.failed };
+      return { items, text: probe.project().text, errors: probe.errors, failed: probe.snapshot().failed };
     })()`);
     assert.equal(state.failed, false); assert.deepEqual(state.errors, []);
     assert.equal(state.text, '- 第一项\n1. 第二项');
@@ -141,6 +162,7 @@ try {
   });
   await check('composition keeps a rendered line instead of reverting to source', async () => {
     await evaluate(`probe.set(${JSON.stringify('# 标题')}, 3)`);
+    await waitFor('probe.root.querySelectorAll("[data-lmm-hide]").length === 1', 'the heading view before composition');
     const before = await evaluate('probe.snapshot()');
     assert.equal(before.markers.length, 1, 'the heading marker starts hidden');
     let during;
@@ -158,6 +180,7 @@ try {
       await delay(140);
     }
     await evaluate(`probe.set(${JSON.stringify('# 标题')}, 3)`);
+    await waitFor('probe.root.querySelectorAll("[data-lmm-hide]").length === 1', 'the settled heading view');
     const after = await evaluate('probe.snapshot()');
     assert.equal(after.markers.length, 1, 'the view is still rendered after composition settles');
     assert.deepEqual(after.errors, []);
@@ -173,6 +196,7 @@ try {
     const word = await evaluate('probe.snapshot()');
     assert.equal(word.text, '#include'); assert.equal(word.markers.length, 0, '#include must never hide the leading hash');
     await evaluate('probe.set("# 标题", 2)');
+    await waitFor('probe.root.querySelectorAll("[data-lmm-hide]").length >= 1', 'the confirmed heading marker');
     const heading = await evaluate('probe.snapshot()'), headingCaret = await evaluate('probe.caret()');
     assert.ok(heading.markers.length >= 1, 'a confirmed heading hides its marker');
     assert.ok(headingCaret.height >= 12, `caret at the heading boundary must stay visible: ${JSON.stringify(headingCaret)}`);
@@ -182,6 +206,7 @@ try {
   });
   await check('hidden Markdown and TeX still show a native caret where it lives', async () => {
     await evaluate('probe.set("**bold**", 2)');
+    await waitFor('probe.root.querySelectorAll("[data-lmm-hide]").length === 2', 'the bold delimiter view');
     const bold = await evaluate('probe.snapshot()'), boldCaret = await evaluate('probe.caret()');
     assert.ok(boldCaret.height >= 12, `caret at a hidden delimiter boundary must stay visible: ${JSON.stringify(boldCaret)}`);
     assert.ok(boldCaret.left >= bold.markers[0].rect.left - 1 && boldCaret.left <= bold.markers[1].rect.left + 1, 'caret stays between the hidden delimiters');
@@ -194,6 +219,7 @@ try {
     assert.deepEqual(open.errors, []);
     // Once the caret has left it, the formula renders.
     await evaluate(`probe.set(${JSON.stringify('公式 $x$ 后')}, 0)`);
+    await waitFor('probe.root.querySelectorAll("[data-lmm-math]").length === 1', 'the formula placeholder away from the caret');
     const math = await evaluate('probe.snapshot()'), mathCaret = await evaluate('probe.caret()');
     assert.equal(math.placeholders.length, 1, 'the formula renders once the caret has left it');
     assert.ok(mathCaret.height >= 12, `caret after a formula placeholder must stay visible: ${JSON.stringify(mathCaret)}`);
@@ -203,6 +229,7 @@ try {
   });
   await check('tall formulas share final baselines and root height, without bottom clipping', async () => {
     await evaluate(`probe.set(${JSON.stringify('前 $x$ 中 $$\\frac{1}{\\frac{2}{3}}$$ 后')})`);
+    await waitFor('probe.root.querySelectorAll("[data-lmm-math]").length === 2 && document.querySelectorAll(".lmm-native-formula").length === 2', 'both formula layouts');
     const state = await evaluate('probe.snapshot()');
     assert.equal(state.formulas.length, 2); assert.equal(state.placeholders.length, 2);
     for (let i = 0; i < 2; i++) {
@@ -214,6 +241,7 @@ try {
   });
   await check('mouse click exposes TeX using the resident selection and allows editing', async () => {
     await evaluate(`probe.set(${JSON.stringify('公式 $x^2$ 后')})`);
+    await waitFor('probe.root.querySelectorAll("[data-lmm-math]").length === 1', 'the clickable formula placeholder');
     const state = await evaluate('probe.snapshot()'), rect = state.placeholders[0].rect;
     await evaluate('window.pointerEvidence=[];document.addEventListener("pointerdown", e=>pointerEvidence.push({target:e.target.outerHTML.slice(0,220),x:e.clientX,y:e.clientY}),{capture:true,once:true})');
     await call('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, x: rect.left + rect.width * 0.6, y: rect.top + rect.height * 0.5 });
@@ -239,9 +267,10 @@ try {
   await check('scrollport clips long formula drafts and repaint never clamps bottom scroll', async () => {
     const text = Array.from({ length: 28 }, (_, i) => `${i} $$\\frac{a}{\\frac{b}{c}}$$`).join('\n');
     await evaluate(`probe.set(${JSON.stringify(text)})`);
+    await waitFor('document.querySelectorAll(".lmm-native-formula").length >= 20', 'the long formula draft view');
     await evaluate('probe.scroll.scrollTop=probe.scroll.scrollHeight;probe.wait()');
     const before = await evaluate('probe.snapshot()');
-    await evaluate('probe.adapter.refresh();probe.wait()'); const after = await evaluate('probe.snapshot()');
+    await evaluate('probe.refresh();probe.wait()'); const after = await evaluate('probe.snapshot()');
     assert.ok(before.maxScroll > 500); assert.ok(Math.abs(before.scrollTop - after.scrollTop) < 1, 'paint must preserve scroll position');
     for (const formula of after.formulas) {
       if (formula.rect.bottom <= after.scroll.top || formula.rect.top >= after.scroll.bottom) assert.notEqual(formula.clip, 'inset(0px)', 'off-scrollport formula must be clipped');
@@ -256,8 +285,18 @@ try {
     assert.equal(await evaluate('probe.editor.getRootElement()===document.getElementById("editor")'), true);
   });
   await evaluate(`probe.set(${JSON.stringify('# 原生无感输入\n**粗体**、_斜体_、`code` 与公式 $E=mc^2$\n> 图片、附件与发送仍由 DSH 管理')})`);
+  await waitFor('probe.root.querySelector("[data-lmm-role~=h1]") && document.querySelectorAll(".lmm-native-formula").length === 1', 'the final rendered preview');
   const screenshot = await call('Page.captureScreenshot', { format: 'png' });
   await fs.writeFile(path.join(out, 'native-preview.png'), Buffer.from(screenshot.data, 'base64'));
+  await check('candidate lifecycle unload removes enhancement and preserves native source', async () => {
+    const before = await evaluate('probe.project().text');
+    await evaluate('probe.unmountPlugin()');
+    const state = await evaluate(`({text: probe.project().text, root: probe.editor.getRootElement() === probe.root, enhanced: probe.root.hasAttribute('data-lmm-native'), layers: document.querySelectorAll('.lmm-native-layer').length, styles: document.querySelectorAll('style[data-plugin="dsh-live-markdown-math"]').length, errors: probe.errors})`);
+    assert.equal(state.text, before); assert.equal(state.root, true); assert.equal(state.enhanced, false);
+    assert.equal(state.layers, 0); assert.equal(state.styles, 0); assert.deepEqual(state.errors, []);
+    return state;
+  });
+  await evaluate('probe.dispose()');
   await fs.writeFile(path.join(out, 'browser-results.json'), JSON.stringify({ browser: 'isolated installed Chrome; not live DSH GUI', results }, null, 2) + '\n');
   console.log(JSON.stringify(results, null, 2));
   assert.ok(results.every(r => r.passed), 'Native browser probe contains failures');

@@ -4,13 +4,14 @@ export const MAX_DOCUMENT = 100_000;
 export const MAX_FORMULA = 4_000;
 export const MAX_FORMULAS = 200;
 const markdownParser = parser.configure(GFM);
-const opaque = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'HTMLTag', 'URL', 'Autolink']);
+const opaque = new Set(['FencedCode', 'CodeBlock', 'InlineCode', 'HTMLBlock', 'HTMLTag', 'URL', 'Autolink',
+  'LinkReference', 'LinkLabel', 'LinkTitle']);
 
 /** Parse only; never interpret Markdown as HTML or load its remote resources. */
 export function analyzeMarkdown(text) {
-  if (text.length > MAX_DOCUMENT) return { nodes: [], math: [], literals: [], limited: true };
-  let { nodes, exclusions } = parseMarkdown(text);
-  const syntax = scanSyntax(text, exclusions, math => {
+  if (text.length > MAX_DOCUMENT) return { nodes: [], math: [], literals: [], fences: [], limited: true };
+  let { nodes, exclusions, fences } = parseMarkdown(text);
+  const reparseMath = math => {
     // A Markdown span may pair a marker inside TeX with a marker after it.
     // Mask accepted formulas, preserving offsets/newlines, and rebuild the
     // surrounding Markdown contexts instead of merely dropping stale spans.
@@ -20,25 +21,39 @@ export function analyzeMarkdown(text) {
       end = formula.to;
     }
     parts.push(text.slice(end));
-    ({ nodes, exclusions } = parseMarkdown(parts.join('')));
+    ({ nodes, exclusions, fences } = parseMarkdown(parts.join('')));
     return exclusions;
-  });
-  return { nodes, ...syntax };
+  };
+  const syntax = scanSyntax(text, exclusions, reparseMath);
+  // Ordinary emphasis/link nodes can also cross TeX, without crossing any
+  // opaque exclusion. One final linear pass makes every accepted formula an
+  // atom, so TeX's *, ~ and brackets cannot close outside Markdown spans.
+  if (!syntax.limited && syntax.math.length) reparseMath(syntax.math);
+  return { nodes, fences, ...syntax };
 }
 
 function parseMarkdown(text) {
-  const nodes = [], exclusions = [];
+  const nodes = [], exclusions = [], fences = [];
   markdownParser.parse(text).iterate({
     enter(node) {
       const range = { name: node.name, from: node.from, to: node.to };
       nodes.push(range);
+      if (node.name === 'FencedCode') {
+        // Use the parser's delimiter positions: container prefixes and closing
+        // indentation belong to the source, not to a code-fence marker.
+        const marks = node.node.getChildren('CodeMark');
+        const info = node.node.getChild('CodeInfo');
+        const bounds = value => value ? { from: value.from, to: value.to } : undefined;
+        fences.push({ from: node.from, to: node.to, open: bounds(marks[0]),
+          close: bounds(marks[1]), info: bounds(info) });
+      }
       if (opaque.has(node.name)) {
         exclusions.push(range);
         return false;
       }
     },
   });
-  return { nodes, exclusions };
+  return { nodes, exclusions, fences };
 }
 
 /** Bounded, non-overlapping delimiter scan. Unclosed/oversized expressions stay source. */

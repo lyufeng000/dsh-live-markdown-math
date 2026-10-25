@@ -340,6 +340,146 @@ native('standard list syntax is recognised and keeps its source', async () => {
   } finally { f.dispose(); }
 });
 
+test('list plans expose only confirmed markers, including delimiters and whitespace variants', () => {
+  for (const text of ['-\t内容', '1.\t内容', '1) 内容', '  - 内容', '- a\n\t- b', '> - 内容', '- - 内容']) {
+    const plan = makePlan(text);
+    assert.ok(plan.lists.length, `${JSON.stringify(text)} has a confirmed list marker`);
+    for (const item of plan.lists) {
+      assert.match(text.slice(item.from, item.to), /^(?:[-*+]|\d{1,9}[.)])$/);
+      assert.ok(plan.segments.some(segment => segment.from === item.from && segment.roles.some(role => role === 'ulm' || role === 'olm')));
+    }
+  }
+  for (const text of ['-', '+', '*', '1)word', '1.5', '    1)', '\t- code', '```\n1)\n```', '<div>\n1)\n</div>', '$$\n1)\n$$']) {
+    assert.equal(makePlan(text).lists.length, 0, `${JSON.stringify(text)} must stay outside list continuation`);
+  }
+  for (const text of ['1)', '12)', '文字\n  12)\t']) {
+    assert.equal(makePlan(text).lists.length, 1, `${JSON.stringify(text)} retains the empty ordered-item composer exception`);
+  }
+});
+
+test('closed fences hide only parser-confirmed syntax inside quote and list containers', () => {
+  for (const text of [
+    '> ```js\n> x\n> ```', '1. > ```js\n   > x\n   > ```',
+    '- ```js\n  x\n  ```', '  ```js\nx\n  ```', '> ~~~~js\n> x\n> ~~~~~',
+  ]) {
+    const plan = makePlan(text), hidden = plan.markers.map(range => text.slice(range.from, range.to));
+    assert.ok(hidden.some(source => /^(?:`{3,}|~{3,})js$/.test(source)), text);
+    assert.ok(hidden.some(source => /^(?:`{3,}|~{3,})$/.test(source)), text);
+    for (const source of hidden.filter(source => source.includes('`') || source.includes('~'))) {
+      assert.match(source, /^(?:`{3,}|~{3,})(?:js)?$/, 'hidden fences never include container prefixes or indentation');
+    }
+  }
+  for (const text of ['> ```js\n> x', '- ```js\n  x', '  ~~~~js\nx\n  ~~~']) {
+    assert.ok(!makePlan(text).markers.some(range => /[`~]/.test(text.slice(range.from, range.to))), text);
+  }
+});
+
+test('pending Markdown markers remain readable inside confirmed containers', () => {
+  for (const text of ['#', '##', '  #', '> #', '- #', '> >', '> >引用', '- >', '- >引用']) {
+    const plan = makePlan(text), pending = Math.max(text.lastIndexOf('#'), text.lastIndexOf('>'));
+    assert.ok(!plan.markers.some(range => range.from <= pending && pending < range.to), text);
+    assert.ok(!plan.segments.some(segment => segment.roles.some(role => /^h[1-6]$/.test(role))), text);
+  }
+  for (const text of ['-', '*', '+', '1.5', '1)word', '```', '```js', '~~~js\ncode']) {
+    assert.equal(makePlan(text).markers.length, 0, text);
+  }
+  for (const text of ['$$\n1) 内容', '\\[\n- 内容', '$unfinished **bold**', '$$\n# 标题']) {
+    const plan = makePlan(text);
+    assert.equal(plan.markers.length, 0, text);
+    assert.equal(plan.lists.length, 0, text);
+  }
+});
+
+native('nested fence preview keeps exact source, indentation and selection', async () => {
+  for (const source of ['> ```js\n> x\n> ```', '- ```js\n  x\n  ```', '1. > ~~~~js\n   > x\n   > ~~~~']) {
+    const f = await fixture(source);
+    try {
+      await tick();
+      assert.equal(f.runtime.projection.clipboardText, source);
+      assert.equal(snapshot(f).range.to, source.length);
+      const hidden = [...f.root.querySelectorAll('[data-lmm-hide]')].map(element => element.textContent);
+      assert.ok(hidden.some(text => /^(?:`{3,}|~{3,})js$/.test(text)), source);
+      assert.ok(hidden.some(text => /^(?:`{3,}|~{3,})$/.test(text)), source);
+      assert.equal(f.adapter.failed, false);
+    } finally { f.dispose(); }
+  }
+});
+
+native('Markdown delimiters across TeX never fragment the native formula leaf', async () => {
+  for (const [source, formula] of [['$x*y$ z*', '$x*y$'], ['$x**y$ z**', '$x**y$'], ['$a~~b$ c~~', '$a~~b$']]) {
+    const f = await fixture(source);
+    try {
+      const state = snapshot(f);
+      assert.equal(f.runtime.projection.clipboardText, source);
+      assert.equal(state.range.to, source.length);
+      assert.ok(state.nodes.some(node => node.text === formula && /\bmath-\d+\b/.test(node.style)), source);
+      assert.equal(makePlan(source).markers.length, 0, 'unmatched Markdown outside TeX stays visible');
+      await tick(); assert.equal(f.adapter.failed, false);
+    } finally { f.dispose(); }
+  }
+});
+
+native('confirmed list variants continue with their indentation, delimiter and separator', async () => {
+  for (const [source, marker] of [
+    ['-\t内容', '-\t'], ['+  内容', '+  '], ['1.\t内容', '2.\t'], ['12) 内容', '13) '],
+    ['  - 内容', '  - '], ['   3)\t内容', '   4)\t'], ['- 父项\n\t- 子项', '\t- '],
+    ['> - 内容', '> - '], ['- - 内容', '  - '], ['> 1) - 内容', '>    - '],
+  ]) {
+    const f = await fixture(source);
+    try {
+      newline(f); await tick();
+      assert.equal(f.runtime.projection.clipboardText, `${source}\n${marker}`, source);
+      assert.equal(snapshot(f).range.to, `${source}\n${marker}`.length, 'the caret follows the inherited marker');
+      assert.equal(f.adapter.failed, false);
+      f.editor.dispatchCommand(api.undo, undefined); await settle();
+      assert.equal(f.runtime.projection.clipboardText, source, 'one undo removes the native newline and inherited marker');
+      f.editor.dispatchCommand(api.redo, undefined); await settle();
+      assert.equal(f.runtime.projection.clipboardText, `${source}\n${marker}`);
+    } finally { f.dispose(); }
+  }
+});
+
+native('whitespace-only items exit without removing their container prefix', async () => {
+  for (const [source, expected] of [
+    ['-  ', ''], ['-\t', ''], ['+ \t ', ''], ['1. \t', ''], ['12)\t ', ''],
+    ['  - \t ', '  '], ['> -\t', '> '], ['- -  ', '- '], ['前文\n  2)\t', '前文\n  '],
+  ]) {
+    const f = await fixture(source);
+    try {
+      newline(f); await tick();
+      assert.equal(f.runtime.projection.clipboardText, expected, JSON.stringify(source));
+      assert.equal(snapshot(f).range.to, expected.length, 'the caret stays at the remaining prefix');
+      assert.equal(f.adapter.failed, false);
+      f.editor.dispatchCommand(api.undo, undefined); await settle();
+      assert.equal(f.runtime.projection.clipboardText, source, 'one undo restores the empty item');
+    } finally { f.dispose(); }
+  }
+});
+
+native('list continuation preserves native references and never rewrites literal source', async () => {
+  const f = await fixture('1) 内容 ');
+  try {
+    let chipKey;
+    f.editor.update(() => {
+      const chip = new api.ReferenceChipNode({ source: 'file', ref: 'fixture.md', label: 'fixture.md', clipboardText: '@fixture.md' });
+      chipKey = chip.getKey(); api.getRoot().getLastChild().append(chip); api.getRoot().selectEnd();
+    }, { discrete: true });
+    const before = f.runtime.projection.clipboardText, occurrences = f.runtime.projection.occurrences;
+    newline(f); await tick();
+    assert.equal(f.runtime.projection.clipboardText, `${before}\n2) `);
+    assert.deepEqual(f.runtime.projection.occurrences, occurrences);
+    assert.equal(f.editor.getEditorState().read(() => api.getRoot().getLastChild().getChildren().some(node => node.getKey() === chipKey)), true);
+  } finally { f.dispose(); }
+  for (const source of ['```\n-\t内容', '    1) 内容', '<div>\n- 内容', '$$\n1) 内容', '999999999. 内容']) {
+    const literal = await fixture(source);
+    try {
+      newline(literal); await tick();
+      assert.equal(literal.runtime.projection.clipboardText, `${source}\n`, source);
+      assert.equal(literal.adapter.failed, false);
+    } finally { literal.dispose(); }
+  }
+});
+
 native('ordered items continue at a line end before later paragraphs or references', async () => {
   for (const text of ['1. 第一项\n后续段落', '前文\n1. 第一项\n后续段落']) {
     const f = await fixture(text);
